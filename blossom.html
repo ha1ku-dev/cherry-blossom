@@ -204,41 +204,57 @@
 
     // ---------- Clouds ----------
 
-    function buildCloudSet(cols, rows) {
-      const set = new Set();
+    function buildClouds(cols, rows) {
+      const clouds = [];
       const numClouds = 3 + Math.floor(Math.random() * 3); // 3–5 clouds
 
+      const cloudTop = 0;
+      const cloudBot = Math.max(1, Math.floor(rows * 0.30));
+
       for (let c = 0; c < numClouds; c++) {
-        // Cloud center in top portion of screen
-        const cx = 0.05 + Math.random() * 0.9;  // 5%–95% horizontally
-        const cy = 0.05 + Math.random() * 0.25; // 5%–30% from top
+        const cx = 0.05 + Math.random() * 0.9;
+        const cy = cloudTop + Math.random() * (cloudBot - cloudTop);
         const centerCol = Math.round(cx * cols);
-        const centerRow = Math.round(cy * rows);
+        const centerRow = Math.round(cy);
+        const rx = Math.floor(cols * (0.06 + Math.random() * 0.10));
+        const ry = Math.floor(rows * (0.03 + Math.random() * 0.04));
+        // Half move right, half move left
+        const baseSpeed = 0.02 + Math.random() * 0.04;
+        const speed = c % 2 === 0 ? baseSpeed : -baseSpeed;
 
-        // Ellipse radii: wider than tall
-        const rx = Math.floor(cols * (0.06 + Math.random() * 0.10)); // 6%–16% of screen width
-        const ry = Math.floor(rows * (0.03 + Math.random() * 0.04)); // 3%–7% of screen height
-        const rxf = rx * rx;
-        const ryf = ry * ry;
+        clouds.push({ centerCol, centerRow, rx, ry, speed, cells: new Set(), fracCol: 0 });
+      }
 
-        for (let dr = -ry; dr <= ry; dr++) {
-          for (let dc = -rx; dc <= rx; dc++) {
-            // Ellipse check
+      return clouds;
+    }
+
+    function getCloudCells(cloud, cols, rows) {
+      // Retry until at least one cell is generated (prevents empty clouds)
+      let cells;
+      do {
+        cells = new Set();
+        const cc = Math.round(cloud.centerCol);
+        const cr = Math.round(cloud.centerRow);
+        const rxf = cloud.rx * cloud.rx;
+        const ryf = cloud.ry * cloud.ry;
+
+        for (let dr = -cloud.ry; dr <= cloud.ry; dr++) {
+          for (let dc = -cloud.rx; dc <= cloud.rx; dc++) {
             if ((dc * dc) / rxf + (dr * dr) / ryf <= 1.05) {
-              const fc = centerCol + dc;
-              const fr = centerRow + dr;
+              const fc = cc + dc;
+              const fr = cr + dr;
               if (fc >= 0 && fc < cols && fr >= 0 && fr < rows) {
-                // ~80% density for puffy cloud look
+                // ~80% density
                 if (Math.random() < 0.8) {
-                  set.add(`${fc},${fr}`);
+                  cells.add(`${fc},${fr}`);
                 }
               }
             }
           }
         }
-      }
+      } while (cells.size === 0);
 
-      return set;
+      return cells;
     }
 
     function cloudColor() {
@@ -257,13 +273,16 @@
       return `rgb(${r},${g},${b})`;
     }
 
+    // ---------- Dev Settings ----------
+    const SHOW_LOGO = true;  // set to false for empty sky (no ]-[ pattern)
+
     // ---------- Character Sets ----------
     // Branch: bold, structured, dense lines
     const BRANCH_CHARS = 'ABDEFHKMNPRTWXYZ14#$%&*+/<>@\\^|'.split('');
     // Flower: round, curved, decorative
     const FLOWER_CHARS = 'acegou*+~,\'.0689O'.split('');
     // Cloud: round, soft, puffy characters
-    const CLOUD_CHARS = '.~,o0689Oaceu*'.split('');
+    const CLOUD_CHARS = '.~,?)(%Q&o0689OaceO3BC@'.split('');
     // Sky: ]-[ logo pattern (3 chars, no space)
     const SKY_CHARS = [']', '-', '['];
 
@@ -279,7 +298,26 @@
 
       const { segments, flowers } = buildBranchSkeleton(cols, rows);
       const flowerMap = buildFlowerMap(flowers, cols, rows);
-      const cloudSet = buildCloudSet(cols, rows);
+      const clouds = buildClouds(cols, rows);
+
+      // Build 2D grid: grid[row][col] = { span, type: 'sky'|'flower'|'branch'|'cloud' }
+      const grid = [];
+      for (let row = 0; row < rows; row++) {
+        grid[row] = [];
+      }
+
+      // Initialize cloud cells
+      for (const cloud of clouds) {
+        cloud.cells = getCloudCells(cloud, cols, rows);
+      }
+
+      // Build a set of all cloud cells for fast lookup
+      const allCloudCells = new Set();
+      for (const cloud of clouds) {
+        for (const key of cloud.cells) {
+          allCloudCells.add(key);
+        }
+      }
 
       matrix.innerHTML = '';
 
@@ -290,27 +328,165 @@
 
           const key = `${col},${row}`;
 
-          if (cloudSet.has(key)) {
+          if (allCloudCells.has(key)) {
             span.textContent = pick(CLOUD_CHARS);
             span.style.color = cloudColor();
+            grid[row][col] = { span, type: 'cloud' };
           } else if (flowerMap.has(key)) {
             span.classList.add('flower');
             span.textContent = pick(FLOWER_CHARS);
             span.style.color = flowerColor(flowerMap.get(key));
+            grid[row][col] = { span, type: 'flower' };
           } else if (isBranch(col, row, cols, rows, segments)) {
             span.classList.add('branch');
             span.textContent = pick(BRANCH_CHARS);
+            grid[row][col] = { span, type: 'branch' };
           } else {
-            span.textContent = SKY_CHARS[col % 3];
+            span.textContent = SHOW_LOGO ? SKY_CHARS[col % 3] : ' ';
             span.style.color = skyColor(row, rows);
+            grid[row][col] = { span, type: 'sky' };
           }
 
           matrix.appendChild(span);
         }
       }
+
+      return { grid, clouds, cols, rows };
     }
 
-    generateMatrix();
+    const { grid, clouds, cols, rows } = generateMatrix();
+
+    // ---------- Cloud Animation ----------
+
+    // Restrict cloud vertical range to top 30% of screen to avoid branch/flower overlap
+    const CLOUD_TOP_ROW = 0;
+    const CLOUD_BOT_ROW = Math.max(1, Math.floor(rows * 0.30));
+    const CLOUD_ROW_SPAN = CLOUD_BOT_ROW - CLOUD_TOP_ROW;
+
+    function cloudRowToGridRow(fracY) {
+      return Math.round(CLOUD_TOP_ROW + fracY * CLOUD_ROW_SPAN);
+    }
+
+    function setCellAsCloud(row, col) {
+      if (row < 0 || row >= rows || col < 0 || col >= cols) return;
+      const cell = grid[row][col];
+      if (cell.type === 'flower' || cell.type === 'branch') return; // don't overwrite flowers/branches
+      cell.type = 'cloud';
+      cell.span.textContent = pick(CLOUD_CHARS);
+      cell.span.style.color = cloudColor();
+      cell.span.classList.remove('flower', 'branch');
+    }
+
+    function setCellAsSky(row, col) {
+      if (row < 0 || row >= rows || col < 0 || col >= cols) return;
+      const cell = grid[row][col];
+      if (cell.type === 'flower' || cell.type === 'branch') return;
+      cell.type = 'sky';
+      cell.span.textContent = SHOW_LOGO ? SKY_CHARS[col % 3] : ' ';
+      cell.span.style.color = skyColor(row, rows);
+      cell.span.classList.remove('flower', 'branch');
+    }
+
+    // Redraw a cloud at its current position (clears old cells first)
+    function redrawCloud(cloud) {
+      // Clear old position
+      for (const key of cloud.cells) {
+        const [c, r] = key.split(',').map(Number);
+        setCellAsSky(r, c);
+      }
+      cloud.cells.clear();
+
+      // Calculate new cells at current centerCol/centerRow
+      cloud.cells = getCloudCells(cloud, cols, rows);
+
+      // Draw new position
+      for (const key of cloud.cells) {
+        const [c, r] = key.split(',').map(Number);
+        setCellAsCloud(r, c);
+      }
+    }
+
+    function removeCloud(cloud) {
+      // Clear all cloud cells back to sky
+      for (const key of cloud.cells) {
+        const [c, r] = key.split(',').map(Number);
+        setCellAsSky(r, c);
+      }
+      cloud.cells.clear();
+    }
+
+    function spawnCloud() {
+      const speedDir = Math.random() < 0.5 ? 1 : -1;
+      const baseSpeed = 0.02 + Math.random() * 0.04;
+      const speed = speedDir * baseSpeed;
+      const rx = Math.floor(cols * (0.06 + Math.random() * 0.10));
+      const ry = Math.floor(rows * (0.03 + Math.random() * 0.04));
+      const centerRow = cloudRowToGridRow(0.05 + Math.random() * 0.95);
+
+      // Start just off-screen on the appropriate side
+      const centerCol = speedDir > 0 ? -rx : cols + rx;
+
+      const cloud = { centerCol, centerRow, rx, ry, speed, cells: new Set(), fracCol: 0 };
+      cloud.cells = getCloudCells(cloud, cols, rows);
+
+      // Draw new cloud
+      for (const key of cloud.cells) {
+        const [c, r] = key.split(',').map(Number);
+        setCellAsCloud(r, c);
+      }
+
+      clouds.push(cloud);
+    }
+
+    // ---------- Animation Loop ----------
+    const ANIM_SPEED_MS = 20; // interval in milliseconds — change to 400 for normal speed
+
+    setInterval(() => {
+      for (let i = clouds.length - 1; i >= 0; i--) {
+        const cloud = clouds[i];
+
+        // Accumulate fractional column movement
+        cloud.fracCol += cloud.speed;
+
+        // When enough fraction builds up, shift by a whole column
+        const colShift = Math.trunc(cloud.fracCol);
+        if (colShift !== 0) {
+          cloud.centerCol += colShift;
+          cloud.fracCol -= colShift;
+          redrawCloud(cloud);
+        }
+
+        // Random character flicker: ~5% of cells change each tick
+        const cloudCellKeys = Array.from(cloud.cells);
+        if (cloudCellKeys.length > 0) {
+          const changeCount = Math.max(1, Math.floor(cloudCellKeys.length * 0.05));
+          for (let ci = 0; ci < changeCount; ci++) {
+            const key = cloudCellKeys[Math.floor(Math.random() * cloudCellKeys.length)];
+            const [c, r] = key.split(',').map(Number);
+            if (r >= 0 && r < rows && c >= 0 && c < cols) {
+              const cell = grid[r][c];
+              if (cell.type === 'cloud') {
+                cell.span.textContent = pick(CLOUD_CHARS);
+              }
+            }
+          }
+        }
+
+        // Remove cloud if it has drifted fully off screen
+        if (cloud.speed > 0 && cloud.centerCol - cloud.rx > cols) {
+          removeCloud(cloud);
+          clouds.splice(i, 1);
+        } else if (cloud.speed < 0 && cloud.centerCol + cloud.rx < 0) {
+          removeCloud(cloud);
+          clouds.splice(i, 1);
+        }
+      }
+    }, ANIM_SPEED_MS);
+
+    // Periodically spawn new clouds (every 3-8 seconds)
+    setInterval(() => {
+      spawnCloud();
+    }, 3000 + Math.random() * 5000);
   </script>
 </body>
 </html>
