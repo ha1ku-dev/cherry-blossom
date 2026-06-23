@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Night Sky</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #050510;
+  }
+  #sky {
+    position: relative;
+    width: 100%; height: 100%;
+    background: #060618;
+    overflow: hidden;
+  }
+  .star {
+    position: absolute;
+    font-family: 'Courier New', 'DejaVu Sans Mono', 'Liberation Mono', 'Consolas', monospace;
+    font-size: 9px;
+    line-height: 1;
+    user-select: none;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="sky"></div>
+
+<script>
+(function () {
+  const container = document.getElementById('sky');
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+
+  function rand(min, max) { return min + Math.random() * (max - min); }
+  function randi(min, max) { return Math.floor(rand(min, max + 1)); }
+  function pick(arr) { return arr[randi(0, arr.length - 1)]; }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // ---- color palette (natural star colors: cool blue-white → pure white) ----
+  const PALETTE = [
+    { r: 35,  g: 45,  b: 65  },  // 0  very dim blue
+    { r: 50,  g: 62,  b: 85  },  // 1  dim blue-gray
+    { r: 68,  g: 82,  b: 105 },  // 2  gray-blue
+    { r: 90,  g: 105, b: 125 },  // 3  cool gray
+    { r: 115, g: 128, b: 148 },  // 4  soft blue-gray
+    { r: 140, g: 152, b: 170 },  // 5  light blue-gray
+    { r: 165, g: 175, b: 190 },  // 6  pale blue-white
+    { r: 185, g: 195, b: 208 },  // 7  silver-white
+    { r: 200, g: 210, b: 222 },  // 8  bright silver
+    { r: 215, g: 225, b: 235 },  // 9  cool white
+    { r: 228, g: 236, b: 244 },  // 10 bright cool white
+    { r: 238, g: 244, b: 250 },  // 11 near-pure white
+    { r: 248, g: 250, b: 253 },  // 12 almost pure white
+    { r: 255, g: 255, b: 255 },  // 13 pure white
+  ];
+
+  function colorAt(idx) {
+    const c = PALETTE[clamp(Math.round(idx), 0, PALETTE.length - 1)];
+    return `rgb(${c.r},${c.g},${c.b})`;
+  }
+
+  const CHARS = [
+    ['.', '·', '˙', 'ˑ'],
+    ['.', '·', '˙', 'ˑ', '•'],
+    ['*', '+', '•', '·'],
+    ['*', '+', '•', 'o'],
+    ['o', 'O', '*', '+'],
+    ['o', 'O', '@', '0'],
+  ];
+
+  function charForTier(tier) {
+    const t = clamp(Math.round(tier), 0, CHARS.length - 1);
+    return pick(CHARS[t]);
+  }
+
+  // ---- generate stars ----
+  const stars = [];
+  const cellW = 6;
+  const cellH = 10;
+  const cols = Math.floor(W / cellW);
+  const rows = Math.floor(H / cellH);
+
+  for (let i = 0; i < 400; i++) {
+    const roll = Math.random();
+    let brightness;
+    if (roll < 0.55)       brightness = rand(0, 0.25);
+    else if (roll < 0.82)  brightness = rand(0.25, 0.55);
+    else if (roll < 0.95)  brightness = rand(0.55, 0.8);
+    else                   brightness = rand(0.8, 1.0);
+
+    const tier = Math.round(brightness * (CHARS.length - 1));
+    const colorIdx = brightness * (PALETTE.length - 1);
+    const opacity = 0.5 + brightness * 0.5;
+
+    // flicker
+    let flickers = false;
+    if (tier === 5 && Math.random() < 0.05) flickers = true;
+    else if (tier === 4 && Math.random() < 0.07) flickers = true;
+    else if (tier === 3 && Math.random() < 0.10) flickers = true;
+
+    const x = rand(0, W);
+    const y = rand(0, H);
+
+    const el = document.createElement('span');
+    el.className = 'star';
+    el.textContent = charForTier(tier);
+    el.style.color = colorAt(colorIdx);
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.style.opacity = opacity.toFixed(2);
+    container.appendChild(el);
+
+    stars.push({
+      el: el,
+      x: x,
+      y: y,
+      baseOpacity: opacity,
+      brightness: brightness,
+      flickers: flickers,
+      phase: rand(0, Math.PI * 2),
+      flickerSpeed: rand(0.02, 0.06),
+    });
+  }
+
+  // ---- pivot point: bottom-left, far off-screen ----
+  const pivotX = -W * 0.45;
+  const pivotY = H * 1.6;
+  const ANGLE_PER_FRAME = 0.00004; // radians per frame — extremely slow
+
+  let angle = 0;
+  let frame = 0;
+
+  function animate() {
+    requestAnimationFrame(animate);
+    frame++;
+    angle += ANGLE_PER_FRAME;
+
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+
+    for (const s of stars) {
+      // rotate around pivot
+      const dx = s.x - pivotX;
+      const dy = s.y - pivotY;
+      const rx = dx * cos - dy * sin;
+      const ry = dx * sin + dy * cos;
+      const nx = pivotX + rx;
+      const ny = pivotY + ry;
+
+      // wrap around — keep stars on screen
+      let wx = nx % (W + 100);
+      let wy = ny % (H + 100);
+      if (wx < -50) wx += W + 100;
+      if (wy < -50) wy += H + 100;
+
+      s.el.style.left = wx + 'px';
+      s.el.style.top = wy + 'px';
+
+      // flicker
+      if (s.flickers) {
+        const wave = Math.sin(frame * s.flickerSpeed + s.phase);
+        const minOp = s.baseOpacity * 0.15;
+        const maxOp = Math.min(1, s.baseOpacity * 1.05);
+        const opacity = minOp + (wave + 1) / 2 * (maxOp - minOp);
+        s.el.style.opacity = opacity.toFixed(3);
+      }
+    }
+  }
+
+  requestAnimationFrame(animate);
+
+  // ---- resize rebuild ----
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => location.reload(), 400);
+  });
+})();
+</script>
+</body>
+</html>
