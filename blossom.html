@@ -57,15 +57,58 @@
     let cols, rows;
     let grid = []; // 2D array: grid[row][col] = span element
 
-    // ---------- Wind System ----------
+    // ---------- Branch & Flower Storage (for re-animation) ----------
+
+    let storedSegments = [];
+    let storedFlowers = [];
+    let branchFlowerCells = new Set(); // tracks "col,row" keys currently occupied by branch/flower
+    const PIVOT_X = -0.30;  // pivot beyond bottom-left corner
+    const PIVOT_Y = 1.25;
+    const MAX_SWAY_ANGLE = 0.0008;
+
+    // ---------- Wind Gust State Machine ----------
+
+    let gustState = 'idle';      // 'idle' | 'gusting'
+    let gustTimer = 0;           // countdown to next gust (seconds)
+    let gustDuration = 0;        // how long gust lasts
+    let gustElapsed = 0;         // time elapsed in current gust
+    let gustStrength = 0;        // 0.04–0.12 intensity of current gust
+    let swayAngle = 0;           // current sway angle (radians)
+
+    function updateWindGust(dt, timestamp) {
+      if (gustState === 'idle') {
+        gustTimer -= dt;
+        swayAngle = 0;  // perfectly still between gusts
+        if (gustTimer <= 0) {
+          // Start a new gust
+          gustState = 'gusting';
+          gustDuration = 3 + Math.random() * 5;   // 3–8 s
+          gustElapsed = 0;
+          gustStrength = 0.04 + Math.random() * 0.08; // 0.04–0.12
+        }
+      } else if (gustState === 'gusting') {
+        gustElapsed += dt;
+        // Single smooth arc: branch bends gently then eases back
+        let t = gustElapsed / gustDuration;
+        swayAngle = gustStrength * MAX_SWAY_ANGLE * Math.sin(t * Math.PI);
+        if (gustElapsed >= gustDuration) {
+          // Gust complete — go straight to idle (sin(π)=0, already at rest)
+          swayAngle = 0;
+          gustState = 'idle';
+          gustTimer = 15 + Math.random() * 30;  // 15–45 s until next gust
+        }
+      }
+    }
+
+    // ---------- Wind System (for clouds) ----------
 
     let windX = 0.8;
     let windY = 0.0;
     let windTargetX = 0.8;
     let windTargetY = 0.0;
     let windChangeTimer = 0;
-    const WIND_CHANGE_MIN = 8;
-    const WIND_CHANGE_MAX = 22;
+    const WIND_CHANGE_MIN = 80;
+    const WIND_CHANGE_MAX = 220;
 
     function updateWind(dt) {
       windChangeTimer -= dt;
@@ -74,12 +117,12 @@
         windTargetY = (Math.random() - 0.5) * 0.7;
         windChangeTimer = WIND_CHANGE_MIN + Math.random() * (WIND_CHANGE_MAX - WIND_CHANGE_MIN);
       }
-      const lerpSpeed = 0.25;
+      const lerpSpeed = 0.025;
       windX += (windTargetX - windX) * lerpSpeed * dt;
       windY += (windTargetY - windY) * lerpSpeed * dt;
     }
 
-    // ---------- Branch Skeleton ----------
+    // ---------- Geometry Helpers ----------
 
     function distToSegment(px, py, ax, ay, bx, by) {
       const abx = bx - ax;
@@ -96,6 +139,27 @@
       const dy = py - cy;
       return Math.sqrt(dx * dx + dy * dy);
     }
+
+    function transformPoint(x, y, angle, px, py) {
+      const dx = x - px;
+      const dy = y - py;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      return {
+        x: px + dx * cos - dy * sin,
+        y: py + dx * sin + dy * cos
+      };
+    }
+
+    function transformSegments(segments, angle, px, py) {
+      return segments.map(seg => {
+        const a = transformPoint(seg.ax, seg.ay, angle, px, py);
+        const b = transformPoint(seg.bx, seg.by, angle, px, py);
+        return { ax: a.x, ay: a.y, bx: b.x, by: b.y, thickness: seg.thickness };
+      });
+    }
+
+    // ---------- Branch Skeleton ----------
 
     function buildSegments(segments, flowers, x, y, angle, length, thickness, depth) {
       if (thickness < 0.003 || length < 0.02) return;
@@ -180,7 +244,7 @@
     }
 
     // ---------- Dev Settings ----------
-    const SHOW_LOGO = true;
+    const SHOW_LOGO = false;
 
     // ---------- Character Sets ----------
     const BRANCH_CHARS = 'ABDEFHKMNPRTWXYZ14#$%&*+/<>@\\^|'.split('');
@@ -208,14 +272,61 @@
       return `rgb(${r},${g},${b})`;
     }
 
+    // ---------- Grid Cell Helpers ----------
+
+    function setCellAsBranch(col, row, char) {
+      if (col < 0 || col >= cols || row < 0 || row >= rows) return;
+      const cell = grid[row][col];
+      cell.type = 'branch';
+      cell.span.textContent = char;
+      cell.span.style.color = '';
+      cell.span.classList.add('branch');
+      cell.span.classList.remove('flower');
+      branchFlowerCells.add(`${col},${row}`);
+    }
+
+    function setCellAsFlower(col, row, char, color) {
+      if (col < 0 || col >= cols || row < 0 || row >= rows) return;
+      const cell = grid[row][col];
+      cell.type = 'flower';
+      cell.span.textContent = char;
+      cell.span.style.color = color;
+      cell.span.classList.add('flower');
+      cell.span.classList.remove('branch');
+      branchFlowerCells.add(`${col},${row}`);
+    }
+
+    function clearBranchFlowerCells() {
+      for (const key of branchFlowerCells) {
+        const [c, r] = key.split(',').map(Number);
+        if (c >= 0 && c < cols && r >= 0 && r < rows) {
+          const cell = grid[r][c];
+          cell.type = 'sky';
+          cell.span.textContent = SHOW_LOGO ? SKY_CHARS[c % 3] : ' ';
+          cell.span.style.color = skyColor(r, rows);
+          cell.span.classList.remove('flower', 'branch');
+        }
+      }
+      branchFlowerCells.clear();
+    }
+
     // ---------- Background Rendering ----------
 
     function renderBackground() {
       cols = Math.ceil(window.innerWidth / CHAR_W);
       rows = Math.ceil(window.innerHeight / CHAR_H);
       const { segments, flowers } = buildBranchSkeleton(cols, rows);
-      const flowerMap = buildFlowerMap(flowers, cols, rows);
+
+      // Store for re-animation
+      storedSegments = segments;
+      storedFlowers = flowers.map(f => ({
+        ...f,
+        phase: Math.random() * Math.PI * 2  // unique spiral phase per flower
+      }));
+
+      const flowerMap = buildFlowerMap(storedFlowers, cols, rows);
       matrix.innerHTML = '';
+      branchFlowerCells.clear();
 
       grid = [];
       for (let row = 0; row < rows; row++) {
@@ -229,10 +340,12 @@
             span.textContent = pick(FLOWER_CHARS);
             span.style.color = flowerColor(flowerMap.get(key));
             grid[row][col] = { span, type: 'flower' };
+            branchFlowerCells.add(key);
           } else if (isBranch(col, row, cols, rows, segments)) {
             span.classList.add('branch');
             span.textContent = pick(BRANCH_CHARS);
             grid[row][col] = { span, type: 'branch' };
+            branchFlowerCells.add(key);
           } else {
             span.textContent = SHOW_LOGO ? SKY_CHARS[col % 3] : ' ';
             span.style.color = skyColor(row, rows);
@@ -240,6 +353,57 @@
           }
           matrix.appendChild(span);
         }
+      }
+    }
+
+    // ---------- Per-Frame Branch & Flower Re-render ----------
+
+    function renderBranchFlowerFrame(timestamp) {
+      // Transform branch segments around pivot
+      let segments = storedSegments;
+      let flowers = storedFlowers;
+
+      if (Math.abs(swayAngle) > 0.0001) {
+        segments = transformSegments(storedSegments, swayAngle, PIVOT_X, PIVOT_Y);
+        flowers = storedFlowers.map(f => {
+          const tp = transformPoint(f.x, f.y, swayAngle, PIVOT_X, PIVOT_Y);
+          return { ...f, x: tp.x, y: tp.y };
+        });
+      }
+
+      // Apply spiral offset to flowers during gust
+      if (gustState === 'gusting') {
+        const spiralRadius = gustStrength * 0.0003;
+        const spiralSpeed = 0.055;
+        flowers = flowers.map(f => ({
+          ...f,
+          x: f.x + spiralRadius * Math.cos(timestamp * 0.001 * spiralSpeed + f.phase),
+          y: f.y + spiralRadius * Math.sin(timestamp * 0.001 * spiralSpeed + f.phase)
+        }));
+      }
+
+      // Render branch cells
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          if (isBranch(col, row, cols, rows, segments)) {
+            setCellAsBranch(col, row, pick(BRANCH_CHARS));
+          }
+        }
+      }
+
+      // Build and render flower map (on top of branch)
+      const flowerMap = buildFlowerMap(flowers, cols, rows);
+      for (const [key, dist] of flowerMap) {
+        const [col, row] = key.split(',').map(Number);
+        let char = pick(FLOWER_CHARS);
+        let color = flowerColor(dist);
+
+        // Extra flicker during gust: randomly change character (gentle)
+        if (gustState === 'gusting' && Math.random() < 0.005) {
+          char = pick(FLOWER_CHARS);
+        }
+
+        setCellAsFlower(col, row, char, color);
       }
     }
 
@@ -298,10 +462,10 @@
       const cloudPixelW = (rx * 2 + 1) * CHAR_W;
 
       const direction = Math.random() < 0.5 ? 1 : -1;
-      const baseDrift = 25 + Math.random() * 25;
+      const baseDrift = 2.5 + Math.random() * 2.5;
 
       const bobAmplitude = 1 + Math.random() * 2;
-      const bobPeriod = 3.5 + Math.random() * 4;
+      const bobPeriod = 35 + Math.random() * 40;
       const bobPhase = Math.random() * Math.PI * 2;
 
       let startX;
@@ -315,7 +479,7 @@
 
       const startY = (0.02 + Math.random() * 0.22) * window.innerHeight;
 
-      const shimmerInterval = 1.5 + Math.random() * 3.5;
+      const shimmerInterval = 15 + Math.random() * 35;
 
       const cloud = {
         x: startX,
@@ -330,7 +494,7 @@
         ry,
         particles,
         occupiedCells: new Set(),
-        morphTimer: 2 + Math.random() * 4,
+        morphTimer: 20 + Math.random() * 40,
         shimmerTimer: shimmerInterval * Math.random(),
         shimmerInterval,
       };
@@ -415,8 +579,8 @@
     // ---------- Cloud Spiral Animation ----------
 
     function updateSpiral(cloud, dt, windStrength) {
-      const rotationSpeed = windStrength * 0.6;
-      const outwardSpeed = 0.04;
+      const rotationSpeed = windStrength * 0.06;
+      const outwardSpeed = 0.004;
 
       for (const p of cloud.particles) {
         p.phase += rotationSpeed * dt;
@@ -472,13 +636,23 @@
       lastTime = timestamp;
 
       updateWind(dt);
+
+      // --- Wind Gust: branch sway + flower spiral ---
+      updateWindGust(dt, timestamp);
+
+      if (gustState !== 'idle') {
+        clearBranchFlowerCells();
+        renderBranchFlowerFrame(timestamp);
+      }
+
+      // --- Clouds ---
       const windStrength = Math.abs(windX);
 
       for (let i = clouds.length - 1; i >= 0; i--) {
         const cloud = clouds[i];
 
         // Move cloud
-        cloud.x += cloud.direction * (cloud.baseDrift + windX * 15) * dt;
+        cloud.x += cloud.direction * (cloud.baseDrift + windX * 1.5) * dt;
         cloud.y = cloud.baseY + Math.sin(timestamp / 1000 * (2 * Math.PI) / cloud.bobPeriod + cloud.bobPhase) * cloud.bobAmplitude;
 
         const cloudWidth = (cloud.rx * 2 + 1) * CHAR_W;
@@ -533,6 +707,11 @@
       windTargetX = 0.8;
       windTargetY = 0.0;
       windChangeTimer = WIND_CHANGE_MIN + Math.random() * (WIND_CHANGE_MAX - WIND_CHANGE_MIN);
+
+      // Reset gust state
+      gustState = 'idle';
+      swayAngle = 0;
+      gustTimer = 5 + Math.random() * 10;  // first gust after 5–15 s
 
       nextSpawnDelay = MIN_SPAWN_DELAY + Math.random() * (MAX_SPAWN_DELAY - MIN_SPAWN_DELAY);
       spawnTimer = 0;
