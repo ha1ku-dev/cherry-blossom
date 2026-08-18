@@ -84,16 +84,16 @@
 
     // Branch/flower gust (light breeze)
     const GUST_DURATION_MIN = 3;
-    const GUST_DURATION_MAX = 6;
+    const GUST_DURATION_MAX = 9;
     const GUST_STRENGTH_MIN = 0.4;
     const GUST_STRENGTH_MAX = 1.0;
-    const GUST_IDLE_MIN = 6;
-    const GUST_IDLE_MAX = 12;
+    const GUST_IDLE_MIN = 2;
+    const GUST_IDLE_MAX = 6;
     const GUST_FIRST_DELAY_MIN = 3;
     const GUST_FIRST_DELAY_MAX = 8;
     const GUST_SPIN_RADIUS_FACTOR = 0.00015;
-    const GUST_SWING_PERIOD_MIN = 1.5;  // fastest oscillation (seconds per full swing)
-    const GUST_SWING_PERIOD_MAX = 3.0;  // slowest oscillation
+    const GUST_SWING_PERIOD_MIN = 3;  // fastest oscillation (seconds per full swing)
+    const GUST_SWING_PERIOD_MAX = 5;  // slowest oscillation
 
     // Flower character shuffling
     const SHUFFLE_FLOWERS = true;  // toggle flower character changes during gusts
@@ -304,6 +304,10 @@
       return arr[Math.floor(Math.random() * arr.length)];
     }
 
+    function deterministicChar(arr, col, row) {
+      return arr[(col * 7 + row * 13) % arr.length];
+    }
+
     function randomCloudChar() {
       return pick(CLOUD_CHARS);
     }
@@ -463,7 +467,7 @@
           // Already a branch cell — keep existing character, just re-track
           branchCells.add(key);
         } else {
-          setCellAsBranch(col, row, pick(BRANCH_CHARS));
+          setCellAsBranch(col, row, deterministicChar(BRANCH_CHARS, col, row));
         }
       }
 
@@ -479,7 +483,7 @@
           color = cell.span.style.color;
         } else {
           // New flower position or timer fired — pick fresh
-          char = pick(FLOWER_CHARS);
+          char = deterministicChar(FLOWER_CHARS, col, row);
           color = flowerColor(dist);
         }
 
