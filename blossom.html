@@ -66,6 +66,36 @@
     const PIVOT_Y = 1.25;
     const MAX_SWAY_ANGLE = 0.0008;
 
+    // ---------- Animation Tuning ----------
+
+    // Cloud lateral movement
+    const CLOUD_DRIFT_MIN = 1.0;
+    const CLOUD_DRIFT_MAX = 2.0;
+    const CLOUD_WIND_FACTOR = 0.8;
+
+    // Cloud character animation
+    const CLOUD_ROTATION_FACTOR = 0.008;
+    const CLOUD_OUTWARD_SPEED = 0.0001;
+    const CLOUD_MORPH_MIN = 30;
+    const CLOUD_MORPH_MAX = 60;
+    const CLOUD_SHIMMER_MIN = 20;
+    const CLOUD_SHIMMER_MAX = 50;
+
+    // Branch/flower gust (light breeze)
+    const GUST_DURATION_MIN = 0.5;
+    const GUST_DURATION_MAX = 1.5;
+    const GUST_STRENGTH_MIN = 0.000003;
+    const GUST_STRENGTH_MAX = 0.000006;
+    const GUST_IDLE_MIN = 8;
+    const GUST_IDLE_MAX = 20;
+    const GUST_FIRST_DELAY_MIN = 3;
+    const GUST_FIRST_DELAY_MAX = 8;
+    const GUST_SPIN_RADIUS_FACTOR = 0.00015;
+
+    // Branch/flower character change intervals
+    const BRANCH_CHAR_INTERVAL = 6;  // seconds between branch character changes
+    const FLOWER_CHAR_INTERVAL = 3;  // seconds between flower character changes
+
     // ---------- Wind Gust State Machine ----------
 
     let gustState = 'idle';      // 'idle' | 'gusting'
@@ -74,6 +104,8 @@
     let gustElapsed = 0;         // time elapsed in current gust
     let gustStrength = 0;        // 0.04–0.12 intensity of current gust
     let swayAngle = 0;           // current sway angle (radians)
+    let branchCharTimer = 0;     // time since last branch character change
+    let flowerCharTimer = 0;     // time since last flower character change
 
     function updateWindGust(dt, timestamp) {
       if (gustState === 'idle') {
@@ -82,9 +114,11 @@
         if (gustTimer <= 0) {
           // Start a new gust
           gustState = 'gusting';
-          gustDuration = 3 + Math.random() * 5;   // 3–8 s
+          gustDuration = GUST_DURATION_MIN + Math.random() * (GUST_DURATION_MAX - GUST_DURATION_MIN);
           gustElapsed = 0;
-          gustStrength = 0.04 + Math.random() * 0.08; // 0.04–0.12
+          gustStrength = GUST_STRENGTH_MIN + Math.random() * (GUST_STRENGTH_MAX - GUST_STRENGTH_MIN);
+          branchCharTimer = 0;  // reset so first frame gets fresh chars
+          flowerCharTimer = 0;
         }
       } else if (gustState === 'gusting') {
         gustElapsed += dt;
@@ -95,7 +129,7 @@
           // Gust complete — go straight to idle (sin(π)=0, already at rest)
           swayAngle = 0;
           gustState = 'idle';
-          gustTimer = 15 + Math.random() * 30;  // 15–45 s until next gust
+          gustTimer = GUST_IDLE_MIN + Math.random() * (GUST_IDLE_MAX - GUST_IDLE_MIN);
         }
       }
     }
@@ -358,7 +392,15 @@
 
     // ---------- Per-Frame Branch & Flower Re-render ----------
 
-    function renderBranchFlowerFrame(timestamp) {
+    function renderBranchFlowerFrame(timestamp, dt) {
+      // Update character change timers
+      branchCharTimer -= dt;
+      flowerCharTimer -= dt;
+      const refreshBranch = branchCharTimer <= 0;
+      const refreshFlower = flowerCharTimer <= 0;
+      if (refreshBranch) branchCharTimer = BRANCH_CHAR_INTERVAL;
+      if (refreshFlower) flowerCharTimer = FLOWER_CHAR_INTERVAL;
+
       // Transform branch segments around pivot
       let segments = storedSegments;
       let flowers = storedFlowers;
@@ -373,7 +415,7 @@
 
       // Apply spiral offset to flowers during gust
       if (gustState === 'gusting') {
-        const spiralRadius = gustStrength * 0.0003;
+        const spiralRadius = gustStrength * GUST_SPIN_RADIUS_FACTOR;
         const spiralSpeed = 0.055;
         flowers = flowers.map(f => ({
           ...f,
@@ -386,7 +428,9 @@
       for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
           if (isBranch(col, row, cols, rows, segments)) {
-            setCellAsBranch(col, row, pick(BRANCH_CHARS));
+            const cell = grid[row][col];
+            const char = refreshBranch ? pick(BRANCH_CHARS) : (cell.type === 'branch' ? cell.span.textContent : pick(BRANCH_CHARS));
+            setCellAsBranch(col, row, char);
           }
         }
       }
@@ -395,13 +439,9 @@
       const flowerMap = buildFlowerMap(flowers, cols, rows);
       for (const [key, dist] of flowerMap) {
         const [col, row] = key.split(',').map(Number);
-        let char = pick(FLOWER_CHARS);
-        let color = flowerColor(dist);
-
-        // Extra flicker during gust: randomly change character (gentle)
-        if (gustState === 'gusting' && Math.random() < 0.005) {
-          char = pick(FLOWER_CHARS);
-        }
+        const cell = grid[row][col];
+        let char = refreshFlower ? pick(FLOWER_CHARS) : (cell.type === 'flower' ? cell.span.textContent : pick(FLOWER_CHARS));
+        let color = refreshFlower ? flowerColor(dist) : (cell.type === 'flower' ? cell.span.style.color : flowerColor(dist));
 
         setCellAsFlower(col, row, char, color);
       }
@@ -462,7 +502,7 @@
       const cloudPixelW = (rx * 2 + 1) * CHAR_W;
 
       const direction = Math.random() < 0.5 ? 1 : -1;
-      const baseDrift = 2.5 + Math.random() * 2.5;
+      const baseDrift = CLOUD_DRIFT_MIN + Math.random() * (CLOUD_DRIFT_MAX - CLOUD_DRIFT_MIN);
 
       const bobAmplitude = 1 + Math.random() * 2;
       const bobPeriod = 35 + Math.random() * 40;
@@ -479,7 +519,7 @@
 
       const startY = (0.02 + Math.random() * 0.22) * window.innerHeight;
 
-      const shimmerInterval = 15 + Math.random() * 35;
+      const shimmerInterval = CLOUD_SHIMMER_MIN + Math.random() * (CLOUD_SHIMMER_MAX - CLOUD_SHIMMER_MIN);
 
       const cloud = {
         x: startX,
@@ -494,7 +534,7 @@
         ry,
         particles,
         occupiedCells: new Set(),
-        morphTimer: 20 + Math.random() * 40,
+        morphTimer: CLOUD_MORPH_MIN + Math.random() * (CLOUD_MORPH_MAX - CLOUD_MORPH_MIN),
         shimmerTimer: shimmerInterval * Math.random(),
         shimmerInterval,
       };
@@ -573,14 +613,14 @@
         }
       }
 
-      cloud.morphTimer = 2 + Math.random() * 4;
+      cloud.morphTimer = CLOUD_MORPH_MIN + Math.random() * (CLOUD_MORPH_MAX - CLOUD_MORPH_MIN);
     }
 
     // ---------- Cloud Spiral Animation ----------
 
     function updateSpiral(cloud, dt, windStrength) {
-      const rotationSpeed = windStrength * 0.06;
-      const outwardSpeed = 0.004;
+      const rotationSpeed = windStrength * CLOUD_ROTATION_FACTOR;
+      const outwardSpeed = CLOUD_OUTWARD_SPEED;
 
       for (const p of cloud.particles) {
         p.phase += rotationSpeed * dt;
@@ -642,7 +682,7 @@
 
       if (gustState !== 'idle') {
         clearBranchFlowerCells();
-        renderBranchFlowerFrame(timestamp);
+        renderBranchFlowerFrame(timestamp, dt);
       }
 
       // --- Clouds ---
@@ -652,7 +692,7 @@
         const cloud = clouds[i];
 
         // Move cloud
-        cloud.x += cloud.direction * (cloud.baseDrift + windX * 1.5) * dt;
+        cloud.x += cloud.direction * (cloud.baseDrift + windX * CLOUD_WIND_FACTOR) * dt;
         cloud.y = cloud.baseY + Math.sin(timestamp / 1000 * (2 * Math.PI) / cloud.bobPeriod + cloud.bobPhase) * cloud.bobAmplitude;
 
         const cloudWidth = (cloud.rx * 2 + 1) * CHAR_W;
@@ -711,7 +751,7 @@
       // Reset gust state
       gustState = 'idle';
       swayAngle = 0;
-      gustTimer = 5 + Math.random() * 10;  // first gust after 5–15 s
+      gustTimer = GUST_FIRST_DELAY_MIN + Math.random() * (GUST_FIRST_DELAY_MAX - GUST_FIRST_DELAY_MIN);  // first gust delay
 
       nextSpawnDelay = MIN_SPAWN_DELAY + Math.random() * (MAX_SPAWN_DELAY - MIN_SPAWN_DELAY);
       spawnTimer = 0;
