@@ -76,11 +76,14 @@
 
     // Cloud character animation
     const CLOUD_ROTATION_FACTOR = 0.008;
-    const CLOUD_OUTWARD_SPEED = 0.0001;
+    const CLOUD_OUTWARD_SPEED = 0.003;
     const CLOUD_MORPH_MIN = 30;
     const CLOUD_MORPH_MAX = 60;
     const CLOUD_SHIMMER_MIN = 20;
     const CLOUD_SHIMMER_MAX = 50;
+
+    // Cloud drift
+    const CLOUD_DRIFT_FACTOR = 0.5;
 
     // Branch/flower gust (light breeze)
     const GUST_DURATION_MIN = 3;
@@ -560,9 +563,9 @@
       if (startOnScreen) {
         startX = cloudPixelW / 2 + Math.random() * (window.innerWidth - cloudPixelW);
       } else if (direction === 1) {
-        startX = -(cloudPixelW + 10);
+        startX = -(rx * CHAR_W);
       } else {
-        startX = window.innerWidth + 10;
+        startX = window.innerWidth + rx * CHAR_W;
       }
 
       const startY = (0.02 + Math.random() * 0.22) * window.innerHeight;
@@ -602,16 +605,17 @@
       }
       cloud.occupiedCells.clear();
 
-      // Compute cloud center in grid coordinates
-      const centerCol = Math.round(cloud.x / CHAR_W);
-      const centerRow = Math.round(cloud.y / CHAR_H);
+      // Compute cloud center in grid coordinates (exact, not rounded — rounding
+      // happens per-particle so each character transitions independently)
+      const centerColExact = cloud.x / CHAR_W;
+      const centerRowExact = cloud.y / CHAR_H;
 
       // Place each particle
       for (const p of cloud.particles) {
         const dc = p.radius * cloud.rx * Math.cos(p.phase);
         const dr = p.radius * cloud.ry * Math.sin(p.phase);
-        const col = Math.round(centerCol + dc);
-        const row = Math.round(centerRow + dr);
+        const col = Math.round(centerColExact + dc);
+        const row = Math.round(centerRowExact + dr);
 
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
           const cell = grid[row][col];
@@ -746,7 +750,7 @@
         const cloud = clouds[i];
 
         // Move cloud
-        cloud.x += cloud.direction * (cloud.baseDrift + windX * CLOUD_WIND_FACTOR) * dt;
+        cloud.x += cloud.direction * (cloud.baseDrift * CLOUD_DRIFT_FACTOR + windX * CLOUD_WIND_FACTOR) * dt;
         cloud.y = cloud.baseY + Math.sin(timestamp / 1000 * (2 * Math.PI) / cloud.bobPeriod + cloud.bobPhase) * cloud.bobAmplitude;
 
         const cloudWidth = (cloud.rx * 2 + 1) * CHAR_W;
