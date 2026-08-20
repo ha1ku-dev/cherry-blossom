@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sky & Branch ASCII</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: linear-gradient(to bottom, #9ad9ed 0%, #e8f2fa 100%);
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #matrix {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    #background {
+      display: flex;
+      flex-wrap: wrap;
+      align-content: flex-start;
+      width: 100%;
+      height: 100%;
+      line-height: 1;
+    }
+
+    .char {
+      font-family: monospace;
+      font-size: 16px;
+      display: inline-block;
+      width: 9.6px;
+      height: 16px;
+      text-align: center;
+    }
+
+    .branch {
+      font-weight: bold;
+      color: #1a1a1a;
+    }
+
+    .flower {
+      font-weight: bold;
+    }
+
+    .cloud-group {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      pointer-events: none;
+      will-change: transform;
+    }
+
+    .cloud-pre {
+      font-family: monospace;
+      font-size: 16px;
+      line-height: 1;
+      margin: 0;
+      padding: 0;
+      white-space: pre;
+      color: #e8f0f8;
+      text-shadow: 0 0 2px rgba(255,255,255,0.5);
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <div id="matrix">
+    <div id="background"></div>
+  </div>
+
+  <script>
+    const matrix = document.getElementById('matrix');
+    const background = document.getElementById('background');
+    const CHAR_W = 9.6;
+    const CHAR_H = 16;
+
+    let cols, rows;
+
+    // ---------- Wind System ----------
+
+    let windX = 0.8;
+    let windY = 0.0;
+    let windTargetX = 0.8;
+    let windTargetY = 0.0;
+    let windChangeTimer = 0;
+    const WIND_CHANGE_MIN = 8;
+    const WIND_CHANGE_MAX = 22;
+
+    function updateWind(dt) {
+      windChangeTimer -= dt;
+      if (windChangeTimer <= 0) {
+        windTargetX = (Math.random() - 0.35) * 2.2;
+        windTargetY = (Math.random() - 0.5) * 0.7;
+        windChangeTimer = WIND_CHANGE_MIN + Math.random() * (WIND_CHANGE_MAX - WIND_CHANGE_MIN);
+      }
+      const lerpSpeed = 0.25;
+      windX += (windTargetX - windX) * lerpSpeed * dt;
+      windY += (windTargetY - windY) * lerpSpeed * dt;
+    }
+
+    // ---------- Branch Skeleton ----------
+
+    function distToSegment(px, py, ax, ay, bx, by) {
+      const abx = bx - ax;
+      const aby = by - ay;
+      const apx = px - ax;
+      const apy = py - ay;
+      const len2 = abx * abx + aby * aby;
+      if (len2 === 0) return Math.sqrt(apx * apx + apy * apy);
+      let t = (apx * abx + apy * aby) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const cx = ax + t * abx;
+      const cy = ay + t * aby;
+      const dx = px - cx;
+      const dy = py - cy;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function buildSegments(segments, flowers, x, y, angle, length, thickness, depth) {
+      if (thickness < 0.003 || length < 0.02) return;
+      const endX = x + Math.cos(angle) * length;
+      const endY = y + Math.sin(angle) * length;
+      const midX = (x + endX) / 2;
+      const midY = (y + endY) / 2;
+      const perpAngle = angle + Math.PI / 2;
+      const offset = length * 0.03 * Math.sin(angle * 3 + depth);
+      const mx = midX + Math.cos(perpAngle) * offset;
+      const my = midY + Math.sin(perpAngle) * offset;
+      segments.push({ ax: x, ay: y, bx: mx, by: my, thickness });
+      segments.push({ ax: mx, ay: my, bx: endX, by: endY, thickness });
+      if (depth === 0) {
+        flowers.push({ x: endX, y: endY, size: 0.012 });
+      } else if (depth === 1) {
+        const ft = 0.35 + Math.random() * 0.4;
+        flowers.push({ x: x + Math.cos(angle) * length * ft, y: y + Math.sin(angle) * length * ft, size: 0.010 });
+        flowers.push({ x: endX, y: endY, size: 0.010 });
+      }
+      if (depth <= 0) return;
+      const numBranches = depth === 1 ? 2 : 3;
+      for (let i = 0; i < numBranches; i++) {
+        const t = 0.25 + (i / numBranches) * 0.5;
+        const subX = x + Math.cos(angle) * length * t;
+        const subY = y + Math.sin(angle) * length * t;
+        const spreadAngle = (i / (numBranches - 1)) - 0.5;
+        const subAngle = angle + spreadAngle * 0.9 + (Math.random() - 0.5) * 0.3;
+        const subLength = length * (0.6 + Math.random() * 0.15);
+        const subThickness = thickness * (0.5 + Math.random() * 0.2);
+        buildSegments(segments, flowers, subX, subY, subAngle, subLength, subThickness, depth - 1);
+      }
+    }
+
+    function buildBranchSkeleton(cols, rows) {
+      const segments = [];
+      const flowers = [];
+      buildSegments(segments, flowers, -0.05, 0.98, -0.55, 0.45, 0.012, 2);
+      return { segments, flowers };
+    }
+
+    function isBranch(col, row, cols, rows, segments) {
+      const x = col / cols;
+      const y = row / rows;
+      for (const seg of segments) {
+        if (distToSegment(x, y, seg.ax, seg.ay, seg.bx, seg.by) < seg.thickness) return true;
+      }
+      return false;
+    }
+
+    function buildFlowerMap(flowers, cols, rows) {
+      const map = new Map();
+      for (const f of flowers) {
+        const centerCol = Math.round(f.x * cols);
+        const centerRow = Math.round(f.y * rows);
+        const radius = Math.max(1, Math.ceil(f.size * cols * 2));
+        const r = radius + Math.floor(Math.random() * 2);
+        for (let dr = -r; dr <= r; dr++) {
+          for (let dc = -r; dc <= r; dc++) {
+            const dist = Math.sqrt(dr * dr + dc * dc);
+            if (dist <= r + 0.5) {
+              const fc = centerCol + dc;
+              const fr = centerRow + dr;
+              if (fc >= 0 && fc < cols && fr >= 0 && fr < rows && Math.random() < 0.7) {
+                const key = `${fc},${fr}`;
+                const normDist = dist / Math.max(1, r);
+                if (!map.has(key) || normDist < map.get(key)) {
+                  map.set(key, normDist);
+                }
+              }
+            }
+          }
+        }
+      }
+      return map;
+    }
+
+    function flowerColor(dist) {
+      const t = Math.min(1, Math.max(0, dist));
+      const j = 12;
+      return `rgb(${Math.round(195 + t * 55) + Math.floor((Math.random() - 0.5) * j)},${Math.round(55 + t * 155) + Math.floor((Math.random() - 0.5) * j)},${Math.round(100 + t * 125) + Math.floor((Math.random() - 0.5) * j)})`;
+    }
+
+    // ---------- Character Sets ----------
+    const BRANCH_CHARS = 'ABDEFHKMNPRTWXYZ14#$%&*+/<>@\\^|'.split('');
+    const FLOWER_CHARS = 'acegou*+~,\'.0689O'.split('');
+    const CLOUD_CHARS = '.~,o0689OaceCCCCOOOOOooooccc0000DD'.split('');
+
+    function pick(arr) {
+      return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    function randomCloudChar() {
+      return pick(CLOUD_CHARS);
+    }
+
+    // ---------- Background Rendering ----------
+
+    function renderBackground() {
+      cols = Math.ceil(window.innerWidth / CHAR_W);
+      rows = Math.ceil(window.innerHeight / CHAR_H);
+      const { segments, flowers } = buildBranchSkeleton(cols, rows);
+      const flowerMap = buildFlowerMap(flowers, cols, rows);
+      background.innerHTML = '';
+
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const span = document.createElement('span');
+          span.className = 'char';
+          const key = `${col},${row}`;
+          if (flowerMap.has(key)) {
+            span.classList.add('flower');
+            span.textContent = pick(FLOWER_CHARS);
+            span.style.color = flowerColor(flowerMap.get(key));
+          } else if (isBranch(col, row, cols, rows, segments)) {
+            span.classList.add('branch');
+            span.textContent = pick(BRANCH_CHARS);
+          }
+          background.appendChild(span);
+        }
+      }
+    }
+
+    // ---------- Cloud Object (Grid-based text rendering) ----------
+
+    // Each cloud particle: { char, phase (radians), radius (0..1) }
+    // The cloud is rendered as a <pre> with a 2D text grid rebuilt each frame
+
+    function buildCloudParticles(rx, ry) {
+      const particles = [];
+      const rxf = rx * rx;
+      const ryf = ry * ry;
+
+      for (let dr = -ry; dr <= ry; dr++) {
+        for (let dc = -rx; dc <= rx; dc++) {
+          if ((dc * dc) / rxf + (dr * dr) / ryf <= 1.05) {
+            if (Math.random() < 0.8) {
+              const phase = Math.random() * Math.PI * 2;
+              const radius = Math.sqrt((dc * dc) / rxf + (dr * dr) / ryf);
+              particles.push({
+                char: randomCloudChar(),
+                phase,
+                radius: Math.min(1, Math.max(0.05, radius)),
+              });
+            }
+          }
+        }
+      }
+      return particles;
+    }
+
+    function createCloud(startOnScreen = false) {
+      const rx = Math.max(2, Math.floor(cols * (0.06 + Math.random() * 0.10)));
+      const ry = Math.max(2, Math.floor(rows * (0.03 + Math.random() * 0.04)));
+
+      // Grid dimensions in characters
+      const gridCols = rx * 2 + 1;
+      const gridRows = ry * 2 + 1;
+
+      let particles = buildCloudParticles(rx, ry);
+
+      const cloudPixelW = gridCols * CHAR_W;
+
+      // Direction: left-to-right or right-to-left
+      const direction = Math.random() < 0.5 ? 1 : -1;
+
+      // Base drift speed in px/s (constant, wind modulates it)
+      const baseDrift = 25 + Math.random() * 25;
+
+      // Bob parameters for gentle vertical bouncing
+      const bobAmplitude = 1 + Math.random() * 2;
+      const bobPeriod = 3.5 + Math.random() * 4;
+      const bobPhase = Math.random() * Math.PI * 2;
+
+      // Spawn position
+      let startX;
+      if (startOnScreen) {
+        startX = cloudPixelW / 2 + Math.random() * (window.innerWidth - cloudPixelW);
+      } else if (direction === 1) {
+        startX = -(cloudPixelW + 10);
+      } else {
+        startX = window.innerWidth + 10;
+      }
+
+      const startY = (0.05 + Math.random() * 0.25) * window.innerHeight;
+
+      // Per-cloud shimmer interval
+      const shimmerInterval = 1.5 + Math.random() * 3.5;
+
+      // Create container and <pre> element
+      const container = document.createElement('div');
+      container.className = 'cloud-group';
+      container.style.transform = `translate(${startX}px, ${startY}px)`;
+
+      const pre = document.createElement('pre');
+      pre.className = 'cloud-pre';
+      container.appendChild(pre);
+      matrix.appendChild(container);
+
+      const cloud = {
+        container,
+        pre,
+        x: startX,
+        y: startY,
+        direction,
+        baseDrift,
+        baseY: startY,
+        bobAmplitude,
+        bobPeriod,
+        bobPhase,
+        rx,
+        ry,
+        gridCols,
+        gridRows,
+        particles,
+        morphTimer: 2 + Math.random() * 4,
+        shimmerTimer: shimmerInterval * Math.random(),
+        shimmerInterval,
+      };
+
+      // Initial render
+      renderCloudGrid(cloud);
+
+      return cloud;
+    }
+
+    // Build the 2D grid string and set it as textContent
+    function renderCloudGrid(cloud) {
+      const { gridCols, gridRows, rx, ry, particles } = cloud;
+
+      // Create 2D array filled with spaces
+      const grid = [];
+      for (let r = 0; r < gridRows; r++) {
+        grid.push(new Array(gridCols).fill(' '));
+      }
+
+      // Place each particle at its spiral position
+      for (const p of particles) {
+        const dc = p.radius * rx * Math.cos(p.phase);
+        const dr = p.radius * ry * Math.sin(p.phase);
+        const col = Math.round(rx + dc);
+        const row = Math.round(ry + dr);
+
+        if (col >= 0 && col < gridCols && row >= 0 && row < gridRows) {
+          // If multiple particles land on same cell, keep the last one (closest to "draw order")
+          grid[row][col] = p.char;
+        }
+      }
+
+      // Join into string
+      const text = grid.map(row => row.join('')).join('\n');
+      cloud.pre.textContent = text;
+    }
+
+    // ---------- Cloud Morphing ----------
+
+    function morphCloud(cloud) {
+      if (cloud.particles.length === 0) return;
+
+      // Remove 1-2 random particles
+      const toRemove = 1 + Math.floor(Math.random() * 2);
+      const actualRemove = Math.min(toRemove, cloud.particles.length);
+      for (let i = 0; i < actualRemove; i++) {
+        const idx = Math.floor(Math.random() * cloud.particles.length);
+        cloud.particles.splice(idx, 1);
+      }
+
+      // Add the same number back, constrained to the ellipse
+      const toAdd = actualRemove;
+      const rxf = cloud.rx * cloud.rx;
+      const ryf = cloud.ry * cloud.ry;
+      const maxAttempts = 50;
+
+      for (let i = 0; i < toAdd; i++) {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const dc = Math.floor(Math.random() * (cloud.rx * 2 + 1)) - cloud.rx;
+          const dr = Math.floor(Math.random() * (cloud.ry * 2 + 1)) - cloud.ry;
+          const ellipseDist = (dc * dc) / rxf + (dr * dr) / ryf;
+
+          if (ellipseDist <= 1.05) {
+            const phase = Math.atan2(dr / Math.max(1, cloud.ry), dc / Math.max(1, cloud.rx));
+            const radius = Math.sqrt((dc * dc) / rxf + (dr * dr) / ryf);
+            cloud.particles.push({
+              char: randomCloudChar(),
+              phase,
+              radius: Math.min(1, Math.max(0.05, radius)),
+            });
+            break;
+          }
+        }
+      }
+
+      cloud.morphTimer = 2 + Math.random() * 4;
+    }
+
+    // ---------- Cloud Spiral Animation ----------
+
+    function updateSpiral(cloud, dt, windStrength) {
+      const rotationSpeed = windStrength * 0.6;
+      const outwardSpeed = 0.04;
+
+      for (const p of cloud.particles) {
+        p.phase += rotationSpeed * dt;
+        p.radius += outwardSpeed * dt;
+
+        if (p.radius > 1.0) {
+          p.radius = 0.05 + Math.random() * 0.2;
+          p.phase = Math.random() * Math.PI * 2;
+        }
+      }
+    }
+
+    // ---------- Cloud Shimmer ----------
+
+    function shimmerCloud(cloud) {
+      if (cloud.particles.length === 0) return;
+      const numToUpdate = Math.max(1, Math.floor(cloud.particles.length * (0.1 + Math.random() * 0.1)));
+      for (let i = 0; i < numToUpdate; i++) {
+        const idx = Math.floor(Math.random() * cloud.particles.length);
+        cloud.particles[idx].char = randomCloudChar();
+      }
+    }
+
+    // ---------- Animation ----------
+
+    let clouds = [];
+    let lastTime = null;
+    const MAX_CLOUDS = 5;
+    const MIN_SPAWN_DELAY = 3;
+    const MAX_SPAWN_DELAY = 7;
+    let spawnTimer = 0;
+    let nextSpawnDelay = 0.3;
+
+    function animate(timestamp) {
+      if (lastTime === null) {
+        lastTime = timestamp;
+        requestAnimationFrame(animate);
+        return;
+      }
+
+      let dt = (timestamp - lastTime) / 1000;
+      if (dt > 0.2) dt = 0.2;
+      lastTime = timestamp;
+
+      // Update global wind
+      updateWind(dt);
+      const windStrength = Math.abs(windX);
+
+      for (let i = clouds.length - 1; i >= 0; i--) {
+        const cloud = clouds[i];
+
+        // Horizontal: constant drift modulated by wind
+        cloud.x += cloud.direction * (cloud.baseDrift + windX * 15) * dt;
+        // Vertical: gentle sinusoidal bounce (independent of wind)
+        cloud.y = cloud.baseY + Math.sin(timestamp / 1000 * (2 * Math.PI) / cloud.bobPeriod + cloud.bobPhase) * cloud.bobAmplitude;
+        cloud.container.style.transform = `translate(${cloud.x}px, ${cloud.y}px)`;
+
+        const cloudWidth = cloud.gridCols * CHAR_W;
+        const offLeft = cloud.x + cloudWidth < -20;
+        const offRight = cloud.x - cloudWidth > window.innerWidth + 20;
+
+        if (offLeft || offRight) {
+          cloud.container.remove();
+          clouds.splice(i, 1);
+        } else {
+          // Update spiral positions
+          updateSpiral(cloud, dt, windStrength);
+
+          // Rebuild the text grid with new positions
+          renderCloudGrid(cloud);
+
+          // Morph timer
+          cloud.morphTimer -= dt;
+          if (cloud.morphTimer <= 0) {
+            morphCloud(cloud);
+          }
+
+          // Shimmer timer
+          cloud.shimmerTimer -= dt;
+          if (cloud.shimmerTimer <= 0) {
+            shimmerCloud(cloud);
+            cloud.shimmerTimer = cloud.shimmerInterval;
+          }
+        }
+      }
+
+      // Spawn new clouds
+      spawnTimer += dt;
+      if (spawnTimer >= nextSpawnDelay && clouds.length < MAX_CLOUDS) {
+        clouds.push(createCloud(false));
+        spawnTimer = 0;
+        nextSpawnDelay = MIN_SPAWN_DELAY + Math.random() * (MAX_SPAWN_DELAY - MIN_SPAWN_DELAY);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // ---------- Init ----------
+
+    function init() {
+      for (const cloud of clouds) {
+        cloud.container.remove();
+      }
+      clouds = [];
+
+      renderBackground();
+
+      // Seed with 2 clouds on-screen
+      clouds.push(createCloud(true));
+      clouds.push(createCloud(true));
+
+      // Reset wind
+      windX = 0.8;
+      windY = 0.0;
+      windTargetX = 0.8;
+      windTargetY = 0.0;
+      windChangeTimer = WIND_CHANGE_MIN + Math.random() * (WIND_CHANGE_MAX - WIND_CHANGE_MIN);
+
+      nextSpawnDelay = MIN_SPAWN_DELAY + Math.random() * (MAX_SPAWN_DELAY - MIN_SPAWN_DELAY);
+      spawnTimer = 0;
+      lastTime = null;
+
+      requestAnimationFrame(animate);
+    }
+
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(init, 200);
+    });
+
+    init();
+  </script>
+</body>
+</html>
