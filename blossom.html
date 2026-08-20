@@ -44,10 +44,24 @@
     .flower {
       font-weight: bold;
     }
+
+    #footer {
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      text-align: right;
+      font-family: monospace;
+      font-size: 16px;
+      color: #1a1a1a;
+      background: transparent;
+      padding: 8px 20px;
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
   <div id="matrix"></div>
+  <div id="footer">hello@ha1ku.dev</div>
 
   <script>
     const matrix = document.getElementById('matrix');
@@ -102,6 +116,25 @@
     const SHUFFLE_FLOWERS = true;  // toggle flower character changes during gusts
     const FLOWER_CHAR_INTERVAL = 2;
 
+    // ---------- Petal Animation (Haiku) ----------
+    const PETAL_SPEED = 200;           // pixels per second
+    const PETAL_STAGGER = 60;          // ms between each letter spawning
+    const PETAL_SPIRAL_TURNS = 2.5;    // full rotations in tornado funnel
+    const PETAL_CONVERGE_RATIO = 0.3;  // fraction of path for convergence phase
+    const PETAL_GUST_DELAY = 3;        // seconds — force first gust timing
+
+    const HAIKU_LINES = [
+      'The art of coding',
+      'Ideas to MVPs',
+      'A cherry blossom'
+    ];
+
+    let petalLetters = [];
+    let petalAnimFired = false;
+    let petalSpawnQueue = [];
+    let petalSpawnTimer = 0;
+    let landedLetterCells = new Set();
+
     // ---------- Wind Gust State Machine ----------
 
     let gustState = 'idle';      // 'idle' | 'gusting'
@@ -126,6 +159,12 @@
           const swingPeriod = GUST_SWING_PERIOD_MIN + Math.random() * (GUST_SWING_PERIOD_MAX - GUST_SWING_PERIOD_MIN);
           gustSwings = Math.max(1, Math.round(gustDuration / swingPeriod));
           flowerCharTimer = 0;
+
+          // Trigger petal haiku animation on first gust
+          if (!petalAnimFired) {
+            petalAnimFired = true;
+            buildPetalQueue();
+          }
         }
       } else if (gustState === 'gusting') {
         gustElapsed += dt;
@@ -354,9 +393,22 @@
     function clearCellToSky(col, row) {
       if (col < 0 || col >= cols || row < 0 || row >= rows) return;
       const cell = grid[row][col];
+      if (cell.type === 'petal' && landedLetterCells.has(`${col},${row}`)) return;
       cell.type = 'sky';
       cell.span.textContent = SHOW_LOGO ? SKY_CHARS[col % 3] : ' ';
       cell.span.style.color = skyColor(row, rows);
+      cell.span.classList.remove('flower', 'branch');
+    }
+
+    function setCellAsPetal(col, row, char, color) {
+      if (col < 0 || col >= cols || row < 0 || row >= rows) return;
+      const cell = grid[row][col];
+      if (cell.type === 'flower' || cell.type === 'branch') return;
+      cell.type = 'petal';
+      cell.span.textContent = char;
+      cell.span.style.color = color;
+      cell.span.style.fontWeight = 'bold';
+      cell.span.style.fontSize = '18px';
       cell.span.classList.remove('flower', 'branch');
     }
 
@@ -528,6 +580,7 @@
       if (col < 0 || col >= cols || row < 0 || row >= rows) return;
       const cell = grid[row][col];
       if (!cell || cell.type === 'flower' || cell.type === 'branch') return;
+      if (cell.type === 'petal' && landedLetterCells.has(`${col},${row}`)) return;
       cell.type = 'sky';
       cell.span.textContent = SHOW_LOGO ? SKY_CHARS[col % 3] : ' ';
       cell.span.style.color = skyColor(row, rows);
@@ -538,6 +591,7 @@
       if (col < 0 || col >= cols || row < 0 || row >= rows) return;
       const cell = grid[row][col];
       if (!cell || cell.type === 'flower' || cell.type === 'branch') return;
+      if (cell.type === 'petal' && landedLetterCells.has(`${col},${row}`)) return;
       cell.type = 'cloud';
       cell.span.textContent = char;
       cell.span.style.color = color;
@@ -706,6 +760,164 @@
       cloud.occupiedCells.clear();
     }
 
+    // ---------- Petal Animation (Haiku) ----------
+
+    function pickSourceFlower() {
+      const weights = storedFlowers.map(f => Math.pow(f.x, 2));
+      const total = weights.reduce((a, b) => a + b, 0);
+      let r = Math.random() * total;
+      for (let i = 0; i < weights.length; i++) {
+        r -= weights[i];
+        if (r <= 0) return storedFlowers[i];
+      }
+      return storedFlowers[storedFlowers.length - 1];
+    }
+
+    function buildPetalQueue() {
+      const tgtStartCol = Math.round(cols * 0.75 - 9);
+      const tgtStartRow = Math.round(rows * 0.66 - 2);
+      const lineSpacing = 2;
+
+      // Compute convergence point from average flower position
+      let avgX = 0, avgY = 0;
+      for (const f of storedFlowers) {
+        avgX += f.x;
+        avgY += f.y;
+      }
+      avgX /= storedFlowers.length;
+      avgY /= storedFlowers.length;
+      const convergeCol = Math.round(avgX * cols);
+      const convergeRow = Math.round(avgY * rows);
+
+      const queue = [];
+      let lineIdx = 0;
+      for (const line of HAIKU_LINES) {
+        for (let i = 0; i < line.length; i++) {
+          const flower = pickSourceFlower();
+          const srcCol = Math.round(flower.x * cols);
+          const srcRow = Math.round(flower.y * rows);
+          const tgtCol = tgtStartCol + i;
+          const tgtRow = tgtStartRow + lineIdx * lineSpacing;
+
+          // Distance for speed calculation (in pixels)
+          const dx = (tgtCol - srcCol) * CHAR_W;
+          const dy = (tgtRow - srcRow) * CHAR_H;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const speed = PETAL_SPEED / Math.max(1, dist);
+
+          queue.push({
+            char: line[i],
+            srcCol,
+            srcRow,
+            tgtCol,
+            tgtRow,
+            convergeCol,
+            convergeRow,
+            speed,
+            startAngle: Math.random() * Math.PI * 2,
+          });
+        }
+        lineIdx++;
+      }
+      petalSpawnQueue = queue;
+    }
+
+    function updatePetals(dt) {
+      // Spawn phase
+      petalSpawnTimer -= dt;
+      if (petalSpawnTimer <= 0 && petalSpawnQueue.length > 0) {
+        const entry = petalSpawnQueue.shift();
+        const color = flowerColor(Math.random() * 0.5);
+        petalLetters.push({
+          char: entry.char,
+          srcCol: entry.srcCol,
+          srcRow: entry.srcRow,
+          tgtCol: entry.tgtCol,
+          tgtRow: entry.tgtRow,
+          convergeCol: entry.convergeCol,
+          convergeRow: entry.convergeRow,
+          curCol: entry.srcCol,
+          curRow: entry.srcRow,
+          progress: 0,
+          speed: entry.speed,
+          startAngle: entry.startAngle,
+          color,
+          landed: false,
+          prevCol: -1,
+          prevRow: -1,
+        });
+        petalSpawnTimer = PETAL_STAGGER / 1000;
+      }
+
+      // Movement phase
+      for (const p of petalLetters) {
+        if (p.landed) continue;
+
+        // Clear previous cell (if different from current)
+        if (p.prevCol !== p.curCol || p.prevRow !== p.curRow) {
+          clearCellToSky(p.prevCol, p.prevRow);
+        }
+        p.prevCol = p.curCol;
+        p.prevRow = p.curRow;
+
+        // Advance progress
+        p.progress += p.speed;
+        if (p.progress >= 1) {
+          // Clear old flying cell before landing
+          if (p.prevCol !== p.tgtCol || p.prevRow !== p.tgtRow) {
+            clearCellToSky(p.prevCol, p.prevRow);
+          }
+          p.curCol = p.tgtCol;
+          p.curRow = p.tgtRow;
+          p.landed = true;
+        } else {
+          const t = p.progress;
+          const numTurns = PETAL_SPIRAL_TURNS;
+          const convergeRatio = PETAL_CONVERGE_RATIO;
+          let x, y;
+
+          if (t < convergeRatio) {
+            // Phase 1: spiral inward to convergence point
+            const lt = t / convergeRatio;
+            const radius = (1 - lt);
+            const angle = p.startAngle + lt * 2 * Math.PI * numTurns;
+            x = p.convergeCol + radius * (p.srcCol - p.convergeCol) * Math.cos(lt * (Math.PI * 0.5));
+            y = p.convergeRow + radius * (p.srcRow - p.convergeRow) * Math.cos(lt * (Math.PI * 0.5));
+            // Add spiral offset
+            const spiralR = (1 - lt) * Math.max(2, Math.abs(p.srcCol - p.convergeCol) * 0.3);
+            x += spiralR * Math.cos(angle);
+            y += spiralR * Math.sin(angle);
+          } else {
+            // Phase 2: spiral outward from convergence to target
+            const lt = (t - convergeRatio) / (1 - convergeRatio);
+            const eased = lt * lt * (3 - 2 * lt); // smoothstep
+            const angle = 2 * Math.PI * numTurns * (1 - lt);
+            x = p.convergeCol + eased * (p.tgtCol - p.convergeCol);
+            y = p.convergeRow + eased * (p.tgtRow - p.convergeRow);
+            // Add spiral offset (decaying)
+            const spiralR = (1 - eased) * Math.max(2, Math.abs(p.tgtCol - p.convergeCol) * 0.25);
+            x += spiralR * Math.cos(angle);
+            y += spiralR * Math.sin(angle);
+          }
+
+          p.curCol = Math.round(x);
+          p.curRow = Math.round(y);
+        }
+
+        // Set cell at current position (don't overwrite branch/flower/landed)
+        const key = `${p.curCol},${p.curRow}`;
+        if (!landedLetterCells.has(key)) {
+          setCellAsPetal(p.curCol, p.curRow, p.char, p.color);
+        }
+
+        if (p.landed) {
+          const landedKey = `${p.tgtCol},${p.tgtRow}`;
+          landedLetterCells.add(landedKey);
+          setCellAsPetal(p.tgtCol, p.tgtRow, p.char, p.color);
+        }
+      }
+    }
+
     // ---------- Animation ----------
 
     let clouds = [];
@@ -784,6 +996,9 @@
         nextSpawnDelay = MIN_SPAWN_DELAY + Math.random() * (MAX_SPAWN_DELAY - MIN_SPAWN_DELAY);
       }
 
+      // --- Petal Letters (Haiku) ---
+      updatePetals(dt);
+
       requestAnimationFrame(animate);
     }
 
@@ -811,7 +1026,14 @@
       swayAngle = 0;
       needsRestore = false;
       flowerCharTimer = 0;
-      gustTimer = GUST_FIRST_DELAY_MIN + Math.random() * (GUST_FIRST_DELAY_MAX - GUST_FIRST_DELAY_MIN);  // first gust delay
+      gustTimer = PETAL_GUST_DELAY;  // force first gust at ~3s for petal animation
+
+      // Reset petal state
+      petalLetters = [];
+      petalAnimFired = false;
+      petalSpawnQueue = [];
+      petalSpawnTimer = 0;
+      landedLetterCells = new Set();
 
       nextSpawnDelay = MIN_SPAWN_DELAY + Math.random() * (MAX_SPAWN_DELAY - MIN_SPAWN_DELAY);
       spawnTimer = 0;
