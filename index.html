@@ -57,6 +57,18 @@
       padding: 8px 20px;
       z-index: 10;
     }
+
+    @media (max-width: 600px) {
+      .char {
+        font-size: 12px;
+        width: 7.2px;
+        height: 12px;
+      }
+      #footer {
+        font-size: 12px;
+        padding: 6px 14px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -65,11 +77,27 @@
 
   <script>
     const matrix = document.getElementById('matrix');
-    const CHAR_W = 9.6;
-    const CHAR_H = 16;
+    let CHAR_W = 9.6;
+    let CHAR_H = 16;
 
     let cols, rows;
     let grid = []; // 2D array: grid[row][col] = span element
+
+    // ---------- Orientation & Tree Config ----------
+
+    let isPortrait = false;
+
+    const TREE_LANDSCAPE = {
+      startX: -0.05, startY: 0.98,
+      angle: -0.55, length: 0.45, thickness: 0.012, depth: 2,
+      pivotX: -0.30, pivotY: 1.25
+    };
+
+    const TREE_PORTRAIT = {
+      startX: 0.05, startY: 0.98,
+      angle: -0.45, length: 0.50, thickness: 0.014, depth: 2,
+      pivotX: 0.05, pivotY: 1.25
+    };
 
     // ---------- Branch & Flower Storage (for re-animation) ----------
 
@@ -77,8 +105,8 @@
     let storedFlowers = [];
     let branchCells = new Set();  // tracks "col,row" keys occupied by branch
     let flowerCells = new Set();  // tracks "col,row" keys occupied by flower
-    const PIVOT_X = -0.30;  // pivot beyond bottom-left corner
-    const PIVOT_Y = 1.25;
+    let PIVOT_X = -0.30;  // pivot beyond bottom-left corner
+    let PIVOT_Y = 1.25;
     const SWAY_MAX_ANGLE = 0.027;  // ~2° max rotation at peak of gust
 
     // ---------- Animation Tuning ----------
@@ -274,10 +302,10 @@
       }
     }
 
-    function buildBranchSkeleton(cols, rows) {
+    function buildBranchSkeleton(cols, rows, cfg) {
       const segments = [];
       const flowers = [];
-      buildSegments(segments, flowers, -0.05, 0.98, -0.55, 0.45, 0.012, 2);
+      buildSegments(segments, flowers, cfg.startX, cfg.startY, cfg.angle, cfg.length, cfg.thickness, cfg.depth);
       return { segments, flowers };
     }
 
@@ -408,16 +436,16 @@
       cell.span.textContent = char;
       cell.span.style.color = color;
       cell.span.style.fontWeight = 'bold';
-      cell.span.style.fontSize = '20px';
+      cell.span.style.fontSize = isPortrait ? '13px' : '20px';
       cell.span.classList.remove('flower', 'branch');
     }
 
     // ---------- Background Rendering ----------
 
-    function renderBackground() {
-      cols = Math.ceil(window.innerWidth / CHAR_W);
-      rows = Math.ceil(window.innerHeight / CHAR_H);
-      const { segments, flowers } = buildBranchSkeleton(cols, rows);
+    function renderBackground(treeCfg) {
+      cols = Math.floor(window.innerWidth / CHAR_W);
+      rows = Math.floor(window.innerHeight / CHAR_H);
+      const { segments, flowers } = buildBranchSkeleton(cols, rows, treeCfg);
 
       // Store for re-animation
       storedSegments = segments;
@@ -599,7 +627,8 @@
     }
 
     function createCloud(startOnScreen = false) {
-      const rx = Math.max(2, Math.floor(cols * (0.06 + Math.random() * 0.10)));
+      let rx = Math.max(2, Math.floor(cols * (0.06 + Math.random() * 0.10)));
+      if (isPortrait) rx = Math.min(rx, Math.floor(cols * 0.12));
       const ry = Math.max(2, Math.floor(rows * (0.03 + Math.random() * 0.04)));
 
       let particles = buildCloudParticles(rx, ry);
@@ -774,8 +803,22 @@
     }
 
     function buildPetalQueue() {
-      const tgtStartCol = Math.round(cols * 0.75 - 9);
-      const tgtStartRow = Math.round(rows * 0.66 - 2);
+      // Find topmost flower position for portrait placement
+      let minFlowerRow = rows;
+      for (const f of storedFlowers) {
+        const r = Math.round(f.y * rows);
+        if (r < minFlowerRow) minFlowerRow = r;
+      }
+
+      let tgtStartCol, tgtStartRow;
+      if (isPortrait) {
+        const longestLine = Math.max(...HAIKU_LINES.map(l => l.length));
+        tgtStartCol = Math.round(cols / 2 - longestLine / 2);
+        tgtStartRow = Math.max(1, minFlowerRow - 4);
+      } else {
+        tgtStartCol = Math.round(cols * 0.75 - 9);
+        tgtStartRow = Math.round(rows * 0.66 - 2);
+      }
       const lineSpacing = 2;
 
       // Compute convergence point from average flower position
@@ -1005,12 +1048,28 @@
     // ---------- Init ----------
 
     function init() {
+      // Detect orientation and select tree config
+      isPortrait = window.innerHeight > window.innerWidth * 1.2;
+      const treeCfg = isPortrait ? TREE_PORTRAIT : TREE_LANDSCAPE;
+      PIVOT_X = treeCfg.pivotX;
+      PIVOT_Y = treeCfg.pivotY;
+
+      // Compute responsive char dimensions from actual font size
+      const testSpan = document.createElement('span');
+      testSpan.className = 'char';
+      testSpan.textContent = 'M';
+      matrix.appendChild(testSpan);
+      const computedSize = parseFloat(getComputedStyle(testSpan).fontSize);
+      CHAR_W = computedSize * 0.6;
+      CHAR_H = computedSize;
+      matrix.removeChild(testSpan);
+
       for (const cloud of clouds) {
         removeCloud(cloud);
       }
       clouds = [];
 
-      renderBackground();
+      renderBackground(treeCfg);
 
       clouds.push(createCloud(true));
       clouds.push(createCloud(true));
